@@ -10,6 +10,7 @@ from typing import List, Dict, Optional, Generator
 from datetime import datetime
 import time
 import re
+import os
 
 from ..utils.retry import retry_with_backoff
 from ..utils.rate_limiter import SUNO_RATE_LIMITER
@@ -269,6 +270,18 @@ class SunoBrowserClient:
             normalized_path = (self.browser_path or "").strip().strip('"').strip("'")
             if normalized_path and Path(normalized_path).exists():
                 launch_kwargs["executable_path"] = normalized_path
+                # Пробуем использовать user-data-dir (профиль браузера)
+                # Для Яндекс браузера профиль обычно в %LOCALAPPDATA%\Yandex\YandexBrowser\User Data
+                yandex_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Yandex" / "YandexBrowser" / "User Data"
+                chrome_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Google" / "Chrome" / "User Data"
+                
+                if yandex_profile.exists():
+                    logger.info(f"Using Yandex browser profile: {yandex_profile}")
+                    launch_kwargs["args"] = [f"--user-data-dir={yandex_profile}"]
+                elif chrome_profile.exists():
+                    logger.info(f"Using Chrome profile: {chrome_profile}")
+                    launch_kwargs["args"] = [f"--user-data-dir={chrome_profile}"]
+            
             browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context()
             

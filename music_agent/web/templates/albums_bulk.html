@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}Массовые операции - MyFlowMusic{% endblock %}
+
+{% block extra_head %}
+<style>
+.album-checkbox:checked + .album-card {
+    border-color: #22c55e;
+    background-color: rgba(34, 197, 94, 0.1);
+}
+.album-card {
+    transition: all 0.2s;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-4">Массовые операции</h1>
+
+<!-- Selection Controls -->
+<div class="bg-gray-800 p-4 rounded-lg mb-6 flex items-center justify-between">
+    <div class="flex items-center space-x-4">
+        <label class="flex items-center cursor-pointer">
+            <input type="checkbox" id="select-all" class="mr-2 w-5 h-5">
+            <span>Выбрать все</span>
+        </label>
+        <span id="selected-count" class="text-green-400 font-semibold">Выбрано: 0</span>
+    </div>
+    <div class="flex items-center space-x-2">
+        <span class="text-gray-400">Фильтр:</span>
+        <select id="filter-status" class="bg-gray-700 rounded px-3 py-1">
+            <option value="all">Все альбомы</option>
+            <option value="no-cover">Без обложки</option>
+            <option value="no-translate">Без перевода</option>
+            <option value="no-process">Не обработаны</option>
+            <option value="ready">Готовы к публикации</option>
+        </select>
+    </div>
+</div>
+
+<!-- Bulk Actions -->
+<div id="bulk-actions" class="bg-gray-800 p-4 rounded-lg mb-6 hidden">
+    <h3 class="font-semibold mb-3">Действия с выбранными (<span id="action-count">0</span>)</h3>
+    <div class="flex flex-wrap gap-3">
+        <button onclick="bulkAction('translate')" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded flex items-center space-x-2">
+            <span>🌐</span><span>Перевести</span>
+        </button>
+        <button onclick="bulkAction('cover')" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded flex items-center space-x-2">
+            <span>🎨</span><span>Обложки</span>
+        </button>
+        <button onclick="bulkAction('process')" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded flex items-center space-x-2">
+            <span>🎚️</span><span>Обработать</span>
+        </button>
+        <button onclick="bulkAction('publish')" class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded flex items-center space-x-2">
+            <span>📤</span><span>Опубликовать</span>
+        </button>
+        <button onclick="clearSelection()" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded">
+            Очистить выбор
+        </button>
+    </div>
+</div>
+
+<!-- Albums Grid -->
+<div id="albums-grid" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    {% for album in albums %}
+    <label class="cursor-pointer relative" data-album-id="{{ album.id }}" data-status="{{ album.status }}">
+        <input type="checkbox" name="selected_albums" value="{{ album.id }}" 
+               class="album-checkbox absolute top-2 right-2 z-10 w-5 h-5 opacity-0"
+               data-title="{{ album.title }}">
+        <div class="album-card bg-gray-800 rounded-lg overflow-hidden border-2 border-transparent hover:border-gray-600">
+            <div class="aspect-square bg-gray-700 relative">
+                {% if album.cover %}
+                <img src="/covers/{{ album.cover.id }}" class="w-full h-full object-cover">
+                {% else %}
+                <div class="w-full h-full flex items-center justify-center">
+                    <span class="text-4xl">💿</span>
+                </div>
+                {% endif %}
+                <!-- Status badges -->
+                <div class="absolute bottom-2 left-2 flex space-x-1">
+                    {% if album.translated %}
+                    <span class="w-3 h-3 bg-green-500 rounded-full" title="Переведён"></span>
+                    {% endif %}
+                    {% if album.cover %}
+                    <span class="w-3 h-3 bg-purple-500 rounded-full" title="Обложка"></span>
+                    {% endif %}
+                    {% if album.processed %}
+                    <span class="w-3 h-3 bg-blue-500 rounded-full" title="Обработан"></span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="p-3">
+                <h3 class="font-semibold truncate">{{ album.title }}</h3>
+                <p class="text-sm text-gray-400">{{ album.artist or 'Unknown' }}</p>
+                <div class="mt-2 flex items-center justify-between">
+                    <span class="text-xs text-gray-500">{{ album.songs_count }} треков</span>
+                    <input type="checkbox" class="w-4 h-4 pointer-events-none">
+                </div>
+            </div>
+        </div>
+    </label>
+    {% endfor %}
+</div>
+
+<!-- Bulk Progress Modal -->
+<div id="bulk-progress-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4">
+        <h3 class="text-xl font-semibold mb-4">Массовая операция</h3>
+        
+        <div class="mb-4">
+            <div class="flex justify-between mb-2">
+                <span id="bulk-current">0 / 0</span>
+                <span id="bulk-percent">0%</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-3">
+                <div id="bulk-progress-bar" class="bg-green-500 h-3 rounded-full transition-all" style="width: 0%"></div>
+            </div>
+        </div>
+        
+        <div id="bulk-current-album" class="text-gray-400 text-sm mb-4">
+            Инициализация...
+        </div>
+        
+        <div id="bulk-results" class="max-h-48 overflow-y-auto space-y-1 mb-4 hidden">
+            <!-- Results will appear here -->
+        </div>
+        
+        <div class="flex space-x-3">
+            <button id="bulk-cancel-btn" onclick="cancelBulkOperation()" class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded">
+                Отменить
+            </button>
+            <button onclick="closeBulkModal()" class="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded hidden" id="bulk-close-btn">
+                Закрыть
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+let selectedAlbums = new Set();
+let bulkOperationCancelled = false;
+let activeBulkTasks = [];
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    // Select all checkbox
+    document.getElementById('select-all').addEventListener('change', function() {
+        const checkboxes = document.querySelectorAll('.album-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = this.checked;
+            if (this.checked) {
+                selectedAlbums.add(cb.value);
+            } else {
+                selectedAlbums.delete(cb.value);
+            }
+        });
+        updateSelectionUI();
+    });
+    
+    // Individual checkboxes
+    document.querySelectorAll('.album-checkbox').forEach(cb => {
+        cb.addEventListener('change', function() {
+            if (this.checked) {
+                selectedAlbums.add(this.value);
+            } else {
+                selectedAlbums.delete(this.value);
+            }
+            updateSelectionUI();
+        });
+    });
+    
+    // Filter
+    document.getElementById('filter-status').addEventListener('change', filterAlbums);
+});
+
+function updateSelectionUI() {
+    const count = selectedAlbums.size;
+    document.getElementById('selected-count').textContent = `Выбрано: ${count}`;
+    document.getElementById('action-count').textContent = count;
+    
+    const bulkActions = document.getElementById('bulk-actions');
+    if (count > 0) {
+        bulkActions.classList.remove('hidden');
+    } else {
+        bulkActions.classList.add('hidden');
+    }
+}
+
+function clearSelection() {
+    selectedAlbums.clear();
+    document.querySelectorAll('.album-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('select-all').checked = false;
+    updateSelectionUI();
+}
+
+function filterAlbums() {
+    const filter = document.getElementById('filter-status').value;
+    const albums = document.querySelectorAll('#albums-grid > label');
+    
+    albums.forEach(album => {
+        let show = true;
+        // Add filtering logic based on album data attributes
+        // This is a placeholder - implement based on your data structure
+        album.style.display = show ? 'block' : 'none';
+    });
+}
+
+async function bulkAction(action) {
+    if (selectedAlbums.size === 0) {
+        showNotification('Ошибка', 'Выберите хотя бы один альбом', 'error');
+        return;
+    }
+    
+    bulkOperationCancelled = false;
+    activeBulkTasks = [];
+    
+    // Show modal
+    const modal = document.getElementById('bulk-progress-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    
+    // Reset UI
+    document.getElementById('bulk-results').innerHTML = '';
+    document.getElementById('bulk-results').classList.add('hidden');
+    document.getElementById('bulk-cancel-btn').classList.remove('hidden');
+    document.getElementById('bulk-close-btn').classList.add('hidden');
+    
+    const albums = Array.from(selectedAlbums);
+    const total = albums.length;
+    let completed = 0;
+    let failed = 0;
+    
+    for (let i = 0; i < albums.length; i++) {
+        if (bulkOperationCancelled) {
+            break;
+        }
+        
+        const albumId = albums[i];
+        const albumTitle = document.querySelector(`input[value="${albumId}"]`).dataset.title;
+        
+        // Update progress
+        document.getElementById('bulk-current').textContent = `${i + 1} / ${total}`;
+        document.getElementById('bulk-percent').textContent = `${Math.round((i / total) * 100)}%`;
+        document.getElementById('bulk-progress-bar').style.width = `${(i / total) * 100}%`;
+        document.getElementById('bulk-current-album').textContent = `Обработка: ${albumTitle}`;
+        
+        try {
+            const response = await fetch(`/api/albums/${albumId}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const data = await response.json();
+            
+            if (data.task_id) {
+                activeBulkTasks.push(data.task_id);
+                
+                // Wait for completion
+                await waitForTask(data.task_id);
+                
+                addBulkResult(albumTitle, 'success');
+                completed++;
+            } else {
+                throw new Error('No task ID');
+            }
+            
+        } catch (error) {
+            addBulkResult(albumTitle, 'error', error.message);
+            failed++;
+        }
+    }
+    
+    // Final update
+    document.getElementById('bulk-current').textContent = `Завершено: ${completed} успешно, ${failed} ошибок`;
+    document.getElementById('bulk-percent').textContent = '100%';
+    document.getElementById('bulk-progress-bar').style.width = '100%';
+    document.getElementById('bulk-current-album').textContent = bulkOperationCancelled ? 'Отменено' : 'Готово!';
+    
+    document.getElementById('bulk-cancel-btn').classList.add('hidden');
+    document.getElementById('bulk-close-btn').classList.remove('hidden');
+    
+    showNotification(
+        bulkOperationCancelled ? 'Отменено' : 'Готово!',
+        `Успешно: ${completed}, Ошибок: ${failed}`,
+        failed > 0 ? 'warning' : 'success'
+    );
+}
+
+async function waitForTask(taskId) {
+    return new Promise((resolve) => {
+        const checkInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/tasks/${taskId}`);
+                const data = await response.json();
+                
+                if (data.status === 'completed' || data.status === 'error' || data.status === 'cancelled') {
+                    clearInterval(checkInterval);
+                    resolve(data);
+                }
+            } catch (e) {
+                // Continue checking
+            }
+        }, 1000);
+        
+        // Timeout after 10 minutes
+        setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve({ status: 'timeout' });
+        }, 600000);
+    });
+}
+
+function addBulkResult(title, status, error = null) {
+    const results = document.getElementById('bulk-results');
+    results.classList.remove('hidden');
+    
+    const item = document.createElement('div');
+    item.className = 'flex items-center justify-between p-2 bg-gray-700 rounded text-sm';
+    item.innerHTML = `
+        <span class="truncate flex-1">${title}</span>
+        <span class="${status === 'success' ? 'text-green-400' : 'text-red-400'} ml-2">
+            ${status === 'success' ? '✓' : '✗'} ${error || ''}
+        </span>
+    `;
+    results.appendChild(item);
+}
+
+function cancelBulkOperation() {
+    bulkOperationCancelled = true;
+    document.getElementById('bulk-current-album').textContent = 'Отмена...';
+    
+    // Cancel all active tasks
+    activeBulkTasks.forEach(taskId => {
+        fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' }).catch(() => {});
+    });
+}
+
+function closeBulkModal() {
+    const modal = document.getElementById('bulk-progress-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    clearSelection();
+    location.reload();
+}
+
+// Close on outside click
+document.getElementById('bulk-progress-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeBulkModal();
+});
+</script>
+{% endblock %}

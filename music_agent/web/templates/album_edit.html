@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+
+{% block title %}Редактирование - {{ album.title }}{% endblock %}
+
+{% block extra_head %}
+<style>
+.editable-field:focus {
+    outline: 2px solid #22c55e;
+    background-color: rgba(34, 197, 94, 0.1);
+}
+.inline-edit {
+    border-bottom: 1px dashed #22c55e;
+    cursor: text;
+}
+.inline-edit:hover {
+    background-color: rgba(34, 197, 94, 0.1);
+}
+.track-item:hover .track-actions {
+    opacity: 1;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+    <a href="/albums/{{ album.id }}" class="text-gray-400 hover:text-white">← Назад к альбому</a>
+    <div class="flex space-x-2">
+        <button onclick="saveAllChanges()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">
+            💾 Сохранить все
+        </button>
+        <a href="/albums/{{ album.id }}" class="bg-gray-600 hover:bg-gray-700 px-4 py-2 rounded">
+            Отмена
+        </a>
+    </div>
+</div>
+
+<!-- Album Metadata -->
+<div class="bg-gray-800 rounded-lg p-6 mb-6">
+    <h2 class="text-xl font-semibold mb-4 flex items-center">
+        📀 Метаданные альбома
+        <span class="text-xs text-gray-400 ml-2">(кликните для редактирования)</span>
+    </h2>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Название (оригинал)</label>
+            <div class="inline-edit text-lg font-semibold p-2 rounded" 
+                 contenteditable="true" 
+                 data-field="title"
+                 data-original="{{ album.title }}">
+                {{ album.title }}
+            </div>
+        </div>
+        
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">
+                Международное название (латиница)
+                <span class="text-xs text-gray-500">— для имен файлов</span>
+            </label>
+            <div class="inline-edit p-2 rounded bg-blue-900/30" 
+                 contenteditable="true" 
+                 data-field="intl_title"
+                 data-original="{{ album.intl_title or '' }}">
+                {{ album.intl_title or 'Авто: ' + album.title }}
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+                {% if album.intl_title %}
+                Ручной ввод
+                {% else %}
+                Будет транслитерировано автоматически
+                {% endif %}
+            </p>
+        </div>
+        
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Исполнитель</label>
+            <div class="inline-edit p-2 rounded" 
+                 contenteditable="true" 
+                 data-field="artist"
+                 data-original="{{ album.artist or '' }}">
+                {{ album.artist or 'Unknown Artist' }}
+            </div>
+        </div>
+        
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Жанр</label>
+            <select id="genre-select" class="bg-gray-700 rounded p-2 w-full" data-field="primary_genre">
+                <option value="Pop" {% if album.primary_genre == 'Pop' %}selected{% endif %}>Pop</option>
+                <option value="Rock" {% if album.primary_genre == 'Rock' %}selected{% endif %}>Rock</option>
+                <option value="Hip-Hop" {% if album.primary_genre == 'Hip-Hop' %}selected{% endif %}>Hip-Hop</option>
+                <option value="Electronic" {% if album.primary_genre == 'Electronic' %}selected{% endif %}>Electronic</option>
+                <option value="Jazz" {% if album.primary_genre == 'Jazz' %}selected{% endif %}>Jazz</option>
+                <option value="Classical" {% if album.primary_genre == 'Classical' %}selected{% endif %}>Classical</option>
+                <option value="Other" {% if album.primary_genre not in ['Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Jazz', 'Classical'] %}selected{% endif %}>Other</option>
+            </select>
+        </div>
+        
+        <div>
+            <label class="block text-sm text-gray-400 mb-1">Тип</label>
+            <select id="type-select" class="bg-gray-700 rounded p-2 w-full" data-field="type">
+                <option value="Single" {% if album.type == 'Single' %}selected{% endif %}>Single</option>
+                <option value="EP" {% if album.type == 'EP' %}selected{% endif %}>EP</option>
+                <option value="Album" {% if album.type == 'Album' %}selected{% endif %}>Album</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="mt-4">
+        <label class="block text-sm text-gray-400 mb-1">Описание</label>
+        <div class="inline-edit p-2 rounded min-h-[80px]" 
+             contenteditable="true" 
+             data-field="description"
+             data-original="{{ album.description or '' }}">
+            {{ album.description or 'Добавьте описание...' }}
+        </div>
+    </div>
+</div>
+
+<!-- Tracks Editor -->
+<div class="bg-gray-800 rounded-lg p-6">
+    <h2 class="text-xl font-semibold mb-4 flex items-center justify-between">
+        <span>🎵 Треки ({{ songs|length }})</span>
+        <button onclick="addNewTrack()" class="text-sm bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded">
+            + Добавить трек
+        </button>
+    </h2>
+    
+    <div id="tracks-list" class="space-y-2">
+        {% for song in songs %}
+        <div class="track-item bg-gray-700 p-4 rounded flex items-center space-x-4" data-song-id="{{ song.id }}">
+            <div class="text-gray-500 w-8 font-mono">{{ song.order }}</div>
+            
+            <div class="flex-1">
+                <div class="inline-edit font-semibold p-1 rounded mb-1" 
+                     contenteditable="true" 
+                     data-song-field="title"
+                     data-original="{{ song.title }}"
+                     title="Название (оригинал)">
+                    {{ song.title }}
+                </div>
+                <div class="inline-edit text-blue-400 p-1 rounded mb-1 text-sm" 
+                     contenteditable="true" 
+                     data-song-field="intl_title"
+                     data-original="{{ song.intl_title or '' }}"
+                     title="Международное название (латиница)">
+                    {{ song.intl_title or 'Авто: ' + song.title }}
+                </div>
+                <div class="flex items-center space-x-4 text-sm">
+                    <div class="inline-edit text-gray-400 p-1 rounded" 
+                         contenteditable="true" 
+                         data-song-field="type"
+                         data-original="{{ song.type or 'Pop' }}">
+                        {{ song.type or 'Pop' }}
+                    </div>
+                    <span class="text-gray-500">{{ song.duration or '0:00' }}</span>
+                </div>
+            </div>
+            
+            <div class="track-actions opacity-0 transition-opacity flex items-center space-x-2">
+                <button onclick="moveTrack('{{ song.id }}', -1)" class="text-gray-400 hover:text-white" title="Вверх">↑</button>
+                <button onclick="moveTrack('{{ song.id }}', 1)" class="text-gray-400 hover:text-white" title="Вниз">↓</button>
+                <button onclick="deleteTrack('{{ song.id }}')" class="text-red-400 hover:text-red-300" title="Удалить">🗑</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Cover Editor -->
+<div class="bg-gray-800 rounded-lg p-6 mt-6">
+    <h2 class="text-xl font-semibold mb-4">🎨 Обложка</h2>
+    
+    <div class="flex items-start space-x-6">
+        <div class="w-48 h-48 bg-gray-700 rounded-lg overflow-hidden flex-shrink-0">
+            {% if album.cover %}
+            <img src="/covers/{{ album.cover.id }}" class="w-full h-full object-cover" id="cover-preview">
+            {% else %}
+            <div class="w-full h-full flex items-center justify-center" id="cover-preview">
+                <span class="text-4xl">💿</span>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="flex-1 space-y-4">
+            <div>
+                <label class="block text-sm text-gray-400 mb-2">Загрузить новую</label>
+                <input type="file" id="cover-file" accept="image/*" class="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-700">
+            </div>
+            
+            <div>
+                <label class="block text-sm text-gray-400 mb-2">Или сгенерировать</label>
+                <button onclick="generateCover()" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded">
+                    🎨 Сгенерировать AI
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Unsaved Changes Warning -->
+<div id="unsaved-warning" class="fixed bottom-4 right-4 bg-yellow-600 text-white px-6 py-3 rounded-lg shadow-lg hidden">
+    <span>⚠️ Есть несохранённые изменения</span>
+    <button onclick="saveAllChanges()" class="ml-4 underline">Сохранить</button>
+</div>
+
+<script>
+let hasUnsavedChanges = false;
+let pendingChanges = {
+    album: {},
+    songs: {}
+};
+
+// Track changes
+document.querySelectorAll('[data-field]').forEach(field => {
+    field.addEventListener('input', function() {
+        const fieldName = this.dataset.field;
+        pendingChanges.album[fieldName] = this.textContent.trim();
+        markUnsaved();
+    });
+});
+
+document.querySelectorAll('[data-song-field]').forEach(field => {
+    field.addEventListener('input', function() {
+        const songId = this.closest('[data-song-id]').dataset.songId;
+        const fieldName = this.dataset.songField;
+        
+        if (!pendingChanges.songs[songId]) {
+            pendingChanges.songs[songId] = {};
+        }
+        pendingChanges.songs[songId][fieldName] = this.textContent.trim();
+        markUnsaved();
+    });
+});
+
+// Select changes
+document.querySelectorAll('select[data-field]').forEach(select => {
+    select.addEventListener('change', function() {
+        pendingChanges.album[this.dataset.field] = this.value;
+        markUnsaved();
+    });
+});
+
+function markUnsaved() {
+    hasUnsavedChanges = true;
+    document.getElementById('unsaved-warning').classList.remove('hidden');
+}
+
+async function saveAllChanges() {
+    if (!hasUnsavedChanges) {
+        showNotification('Инфо', 'Нет изменений для сохранения', 'info');
+        return;
+    }
+    
+    try {
+        // Save album metadata
+        if (Object.keys(pendingChanges.album).length > 0) {
+            const response = await fetch(`/api/albums/{{ album.id }}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(pendingChanges.album)
+            });
+            
+            if (!response.ok) throw new Error('Failed to save album');
+        }
+        
+        // Save song changes
+        for (const [songId, changes] of Object.entries(pendingChanges.songs)) {
+            const response = await fetch(`/api/songs/${songId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(changes)
+            });
+            
+            if (!response.ok) throw new Error(`Failed to save song ${songId}`);
+        }
+        
+        hasUnsavedChanges = false;
+        document.getElementById('unsaved-warning').classList.add('hidden');
+        pendingChanges = { album: {}, songs: {} };
+        
+        showNotification('✅ Сохранено', 'Все изменения сохранены', 'success');
+        
+    } catch (error) {
+        showNotification('❌ Ошибка', error.message, 'error');
+    }
+}
+
+async function moveTrack(songId, direction) {
+    // Implementation for reordering tracks
+    showNotification('Инфо', 'Перемещение трека...', 'info');
+}
+
+async function deleteTrack(songId) {
+    if (!confirm('Удалить этот трек?')) return;
+    
+    try {
+        const response = await fetch(`/api/songs/${songId}`, { method: 'DELETE' });
+        if (response.ok) {
+            document.querySelector(`[data-song-id="${songId}"]`).remove();
+            showNotification('✅ Удалено', 'Трек удалён', 'success');
+        }
+    } catch (error) {
+        showNotification('❌ Ошибка', error.message, 'error');
+    }
+}
+
+function addNewTrack() {
+    showNotification('Инфо', 'Добавление трека...', 'info');
+}
+
+function generateCover() {
+    fetch(`/api/albums/{{ album.id }}/cover`, { method: 'POST' })
+        .then(() => showNotification('✅ Запущено', 'Генерация обложки', 'success'))
+        .catch(e => showNotification('❌ Ошибка', e.message, 'error'));
+}
+
+// Cover file upload
+document.getElementById('cover-file').addEventListener('change', function(e) {
+    if (e.target.files.length > 0) {
+        showNotification('Инфо', 'Загрузка обложки...', 'info');
+        // Implementation for cover upload
+    }
+});
+
+// Warn before leaving with unsaved changes
+window.addEventListener('beforeunload', (e) => {
+    if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+</script>
+{% endblock %}

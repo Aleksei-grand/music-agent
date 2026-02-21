@@ -1,0 +1,400 @@
+"""
+Клиент для Suno (Reverse Engineering + Playwright fallback)
+API endpoints изучены через DevTools
+"""
+import requests
+import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional, Generator
+from datetime import datetime
+import time
+import re
+
+from ..utils.retry import retry_with_backoff
+from ..utils.rate_limiter import SUNO_RATE_LIMITER
+
+logger = logging.getLogger(__name__)
+
+
+class SunoTrack:
+    """Модель трека от Suno"""
+    def __init__(self, data: dict):
+        self.id = data.get('id')
+        self.title = data.get('title', 'Untitled')
+        self.audio_url = data.get('audio_url')
+        self.image_url = data.get('image_url')
+        self.video_url = data.get('video_url')
+        self.lyrics = data.get('metadata', {}).get('prompt', '')  # Текст песни
+        self.style = data.get('metadata', {}).get('tags', '')
+        self.duration = data.get('metadata', {}, {}).get('duration', 0)
+        self.created_at = data.get('created_at')
+        self.is_public = data.get('is_public', False)
+        self.play_count = data.get('play_count', 0)
+        
+    def __repr__(self):
+        return f"SunoTrack(id={self.id}, title='{self.title}')"
+
+
+class SunoAPIClient:
+    """
+    Reverse Engineering клиент для Suno API
+    Использует внутренние endpoints сайта
+    """
+    
+    BASE_URL = "https://studio-api.suno.ai"
+    
+    def __init__(self, cookie: str, proxy: Optional[str] = None):
+        self.cookie = cookie
+        self.proxy = proxy
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cookie': cookie,
+            'Origin': 'https://suno.com',
+            'Referer': 'https://suno.com/',
+        })
+        if proxy:
+            self.session.proxies = {'http': proxy, 'https': proxy}
+    
+    def validate_cookie(self) -> bool:
+        """
+        Проверить валидность cookie перед использованием
+        
+        Returns:
+            True если cookie рабочий, False если нет
+        """
+        try:
+            logger.debug("Validating Suno cookie...")
+            SUNO_RATE_LIMITER.acquire()
+            
+            response = self.session.get(
+                f"{self.BASE_URL}/api/feed/",
+                params={'limit': 1},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                logger.info("Suno cookie is valid")
+                return True
+            elif response.status_code == 401:
+                logger.error("Suno cookie expired or invalid (401)")
+                return False
+            elif response.status_code == 429:
+                logger.warning("Suno rate limited (429)")
+                return True  # Cookie валиден, но rate limited
+            else:
+                logger.warning(f"Suno cookie validation returned {response.status_code}")
+                return False
+                
+        except requests.RequestException as e:
+            logger.error(f"Cookie validation failed: {e}")
+            return False
+    
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(requests.RequestException,),
+        on_retry=lambda attempt, e: logger.warning(f"Suno API retry {attempt}: {e}")
+    )
+    def _fetch_page(self, params: dict) -> dict:
+        """Внутренний метод с retry для получения страницы"""
+        SUNO_RATE_LIMITER.acquire()
+        response = self.session.get(
+            f"{self.BASE_URL}/api/feed/",
+            params=params,
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    def get_library(self, limit: int = 1000) -> List[SunoTrack]:
+        """
+        Получить все треки из библиотеки пользователя
+        Endpoint: /api/feed/
+        """
+        tracks = []
+        cursor = None
+        
+        while True:
+            params = {'limit': min(limit, 100)}  # Макс 100 за раз
+            if cursor:
+                params['cursor'] = cursor
+            
+            try:
+                data = self._fetch_page(params)
+                
+                clips = data.get('clips', [])
+                if not clips:
+                    break
+                
+                for clip_data in clips:
+                    track = SunoTrack(clip_data)
+                    tracks.append(track)
+                    logger.debug(f"Found track: {track.title} ({track.created_at})")
+                
+                # Пагинация
+                cursor = data.get('cursor')
+                if not cursor or len(tracks) >= limit:
+                    break
+                    
+                time.sleep(0.5)  # Не DDOS'им сервер
+                
+            except requests.RequestException as e:
+                logger.error(f"Error fetching library: {e}")
+                raise
+        
+        logger.info(f"Loaded {len(tracks)} tracks from Suno library")
+        return tracks
+    
+    def get_track(self, track_id: str) -> Optional[SunoTrack]:
+        """
+        Получить конкретный трек по ID
+        Endpoint: /api/feed/?ids={id}
+        """
+        try:
+            response = self.session.get(
+                f"{self.BASE_URL}/api/feed/",
+                params={'ids': track_id},
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            clips = data.get('clips', [])
+            if clips:
+                return SunoTrack(clips[0])
+            return None
+            
+        except requests.RequestException as e:
+            logger.error(f"Error fetching track {track_id}: {e}")
+            return None
+    
+    def download_audio(self, track: SunoTrack, output_path: Path) -> bool:
+        """Скачать аудио файл"""
+        if not track.audio_url:
+            logger.error(f"No audio URL for track {track.id}")
+            return False
+        
+        try:
+            response = self.session.get(track.audio_url, timeout=60, stream=True)
+            response.raise_for_status()
+            
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            logger.info(f"Downloaded audio: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error downloading audio: {e}")
+            return False
+    
+    def download_image(self, track: SunoTrack, output_path: Path) -> bool:
+        """Скачать обложку"""
+        if not track.image_url:
+            logger.error(f"No image URL for track {track.id}")
+            return False
+        
+        try:
+            response = self.session.get(track.image_url, timeout=30)
+            response.raise_for_status()
+            
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(output_path, 'wb') as f:
+                f.write(response.content)
+            
+            logger.info(f"Downloaded image: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error downloading image: {e}")
+            return False
+
+
+class SunoBrowserClient:
+    """
+    Fallback клиент через Playwright (браузерная автоматизация)
+    Используется если API блокирует
+    """
+    
+    def __init__(self, cookie: str, headless: bool = True):
+        self.cookie = cookie
+        self.headless = headless
+        
+    def get_library(self) -> List[SunoTrack]:
+        """Получить треки через браузер"""
+        from playwright.sync_api import sync_playwright
+        
+        tracks = []
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=self.headless)
+            context = browser.new_context()
+            
+            # Устанавливаем куки
+            context.add_cookies([{
+                'name': 'session',
+                'value': self._extract_session_cookie(),
+                'domain': '.suno.com',
+                'path': '/'
+            }])
+            
+            page = context.new_page()
+            
+            try:
+                # Открываем библиотеку
+                logger.info("Opening Suno library in browser...")
+                page.goto("https://suno.com/library", timeout=60000)
+                
+                # Ждём загрузки треков
+                page.wait_for_selector("[data-testid='track-item']", timeout=30000)
+                
+                # Прокручиваем для подгрузки всех треков
+                self._scroll_to_load_all(page)
+                
+                # Извлекаем данные
+                track_elements = page.query_selector_all("[data-testid='track-item']")
+                
+                for elem in track_elements:
+                    try:
+                        # Извлекаем ID из атрибута или URL
+                        track_id = elem.get_attribute('data-track-id')
+                        title_elem = elem.query_selector(".track-title")
+                        title = title_elem.inner_text() if title_elem else "Untitled"
+                        
+                        # Дата создания
+                        date_elem = elem.query_selector(".track-date")
+                        created_at = date_elem.get_attribute('datetime') if date_elem else None
+                        
+                        # Создаём объект с минимальными данными
+                        # Полные данные получим через API или отдельный запрос
+                        track_data = {
+                            'id': track_id,
+                            'title': title,
+                            'created_at': created_at,
+                            'metadata': {}
+                        }
+                        tracks.append(SunoTrack(track_data))
+                        
+                    except Exception as e:
+                        logger.warning(f"Error parsing track element: {e}")
+                        continue
+                
+            except Exception as e:
+                logger.error(f"Browser error: {e}")
+                raise
+            finally:
+                browser.close()
+        
+        return tracks
+    
+    def _extract_session_cookie(self) -> str:
+        """Извлечь session из cookie строки"""
+        match = re.search(r'session=([^;]+)', self.cookie)
+        return match.group(1) if match else self.cookie
+    
+    def _scroll_to_load_all(self, page):
+        """Прокрутка страницы для подгрузки всех треков"""
+        logger.info("Scrolling to load all tracks...")
+        last_height = 0
+        retries = 0
+        
+        while retries < 5:
+            # Прокручиваем вниз
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
+            
+            # Проверяем высоту
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == last_height:
+                retries += 1
+            else:
+                retries = 0
+                last_height = new_height
+                logger.debug(f"Loaded more tracks, height: {new_height}")
+
+
+class SunoClient:
+    """
+    Унифицированный клиент Suno
+    Сначала пробует API (быстрее), потом браузер (надёжнее)
+    """
+    
+    def __init__(self, cookie: str, proxy: Optional[str] = None):
+        self.cookie = cookie
+        self.proxy = proxy
+        self.api_client = SunoAPIClient(cookie, proxy)
+        self.browser_client = None  # Создаём только при необходимости
+    
+    def get_all_tracks(self, use_browser_fallback: bool = True) -> List[SunoTrack]:
+        """
+        Получить все треки
+        Сначала пробует API, при неудаче - браузер
+        """
+        try:
+            logger.info("Trying API method...")
+            return self.api_client.get_library()
+        except Exception as e:
+            logger.warning(f"API method failed: {e}")
+            
+            if use_browser_fallback:
+                logger.info("Falling back to browser method...")
+                self.browser_client = SunoBrowserClient(self.cookie, headless=False)
+                return self.browser_client.get_library()
+            else:
+                raise
+    
+    def download_track(self, track: SunoTrack, raw_dir: Path) -> Dict[Path, bool]:
+        """
+        Скачать трек полностью (audio + image + metadata)
+        Returns: {file: success}
+        """
+        results = {}
+        track_dir = raw_dir / track.id
+        track_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Скачиваем аудио
+        audio_path = track_dir / "audio.mp3"
+        if not audio_path.exists():
+            results['audio'] = self.api_client.download_audio(track, audio_path)
+        else:
+            logger.info(f"Audio already exists: {audio_path}")
+            results['audio'] = True
+        
+        # Скачиваем обложку
+        image_path = track_dir / "cover.jpg"
+        if not image_path.exists():
+            results['image'] = self.api_client.download_image(track, image_path)
+        else:
+            logger.info(f"Image already exists: {image_path}")
+            results['image'] = True
+        
+        # Сохраняем метаданные
+        metadata_path = track_dir / "metadata.json"
+        if not metadata_path.exists():
+            metadata = {
+                'id': track.id,
+                'title': track.title,
+                'style': track.style,
+                'lyrics': track.lyrics,
+                'duration': track.duration,
+                'created_at': track.created_at,
+                'audio_url': track.audio_url,
+                'image_url': track.image_url,
+                'downloaded_at': datetime.utcnow().isoformat()
+            }
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            results['metadata'] = True
+            logger.info(f"Saved metadata: {metadata_path}")
+        else:
+            results['metadata'] = True
+        
+        return results

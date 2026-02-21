@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - MyFlowMusic{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-8">Dashboard</h1>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <p class="text-gray-400">Альбомов</p>
+        <p class="text-3xl font-bold text-green-400">{{ stats.albums }}</p>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <p class="text-gray-400">Песен</p>
+        <p class="text-3xl font-bold text-blue-400">{{ stats.songs }}</p>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <p class="text-gray-400">Обработано</p>
+        <p class="text-3xl font-bold text-purple-400">{{ stats.processed }}</p>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <p class="text-gray-400">Опубликовано</p>
+        <p class="text-3xl font-bold text-yellow-400">{{ stats.published }}</p>
+    </div>
+</div>
+
+<!-- Actions -->
+<div class="bg-gray-800 p-6 rounded-lg mb-8">
+    <h2 class="text-lg font-semibold mb-4">Быстрые действия</h2>
+    <div class="flex gap-4">
+        <a href="/api/sync" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded">🔄 Синхронизировать</a>
+        <a href="/covers" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded">🎨 Обложки</a>
+        <a href="/publish" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded">📤 Публиковать</a>
+    </div>
+</div>
+
+<!-- Recent Albums -->
+<div class="bg-gray-800 p-6 rounded-lg">
+    <h2 class="text-lg font-semibold mb-4">Последние альбомы</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {% for album in recent_albums %}
+        <a href="/albums/{{ album.id }}" class="block">
+            <div class="aspect-square bg-gray-700 rounded mb-2 flex items-center justify-center">
+                {% if album.cover %}<img src="/covers/{{ album.cover.id }}" class="w-full h-full object-cover">{% else %}<span class="text-4xl">💿</span>{% endif %}
+            </div>
+            <h3 class="font-semibold truncate">{{ album.title }}</h3>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

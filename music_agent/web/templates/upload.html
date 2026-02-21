@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Загрузка - MyFlowMusic{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-8">Загрузка аудио</h1>
+
+<!-- Drag & Drop Zone -->
+<div id="drop-zone" class="border-4 border-dashed border-gray-600 rounded-lg p-12 text-center hover:border-green-500 transition-colors cursor-pointer mb-8">
+    <div class="text-6xl mb-4">📁</div>
+    <h2 class="text-xl font-semibold mb-2">Перетащите аудио файлы сюда</h2>
+    <p class="text-gray-400 mb-4">или нажмите для выбора файлов</p>
+    <input type="file" id="file-input" multiple accept="audio/*" class="hidden">
+    <button onclick="document.getElementById('file-input').click()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded">
+        Выбрать файлы
+    </button>
+    <p class="text-sm text-gray-500 mt-4">Поддерживаются: MP3, WAV, FLAC (макс. 50MB)</p>
+</div>
+
+<!-- Upload List -->
+<div id="upload-list" class="space-y-2">
+    <!-- Upload items will appear here -->
+</div>
+
+<!-- Quick Actions -->
+<div class="mt-8 bg-gray-800 p-6 rounded-lg">
+    <h2 class="text-lg font-semibold mb-4">Быстрые действия</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <button onclick="triggerSync()" class="bg-blue-600 hover:bg-blue-700 p-4 rounded text-left">
+            <div class="text-2xl mb-2">🔄</div>
+            <div class="font-semibold">Синхронизировать</div>
+            <div class="text-sm text-gray-400">Обновить данные из Suno</div>
+        </button>
+        <a href="/albums" class="bg-purple-600 hover:bg-purple-700 p-4 rounded text-left block">
+            <div class="text-2xl mb-2">💿</div>
+            <div class="font-semibold">Альбомы</div>
+            <div class="text-sm text-gray-400">Управление альбомами</div>
+        </a>
+        <a href="/tasks" class="bg-yellow-600 hover:bg-yellow-700 p-4 rounded text-left block">
+            <div class="text-2xl mb-2">📋</div>
+            <div class="font-semibold">Задачи</div>
+            <div class="text-sm text-gray-400">Прогресс операций</div>
+        </a>
+    </div>
+</div>
+
+<script>
+// Handle file input change
+document.getElementById('file-input').addEventListener('change', function(e) {
+    const files = e.target.files;
+    const uploadList = document.getElementById('upload-list');
+    
+    for (const file of files) {
+        if (file.type.startsWith('audio/')) {
+            uploadFile(file, uploadList);
+        } else {
+            showNotification('Пропущен файл', `${file.name} не является аудио`, 'warning');
+        }
+    }
+});
+
+async function triggerSync() {
+    try {
+        const response = await fetch('/api/sync', { method: 'POST' });
+        const data = await response.json();
+        
+        if (data.task_id) {
+            showNotification('Синхронизация запущена', `Task ID: ${data.task_id}`, 'info');
+        }
+    } catch (error) {
+        showNotification('Ошибка', 'Не удалось запустить синхронизацию', 'error');
+    }
+}
+</script>
+{% endblock %}

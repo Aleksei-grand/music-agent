@@ -1,0 +1,359 @@
+{% extends "base.html" %}
+
+{% block title %}{{ album.title }} - MyFlowMusic{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+    <a href="/albums" class="text-gray-400 hover:text-white">← Назад к альбомам</a>
+    <a href="/albums/{{ album.id }}/edit" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded flex items-center space-x-2">
+        <span>✏️</span><span>Редактировать</span>
+    </a>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+    <!-- Album Cover -->
+    <div>
+        <div class="aspect-square bg-gray-800 rounded-lg overflow-hidden mb-4">
+            {% if album.cover %}
+            <img src="/covers/{{ album.cover.id }}" class="w-full h-full object-cover">
+            {% else %}
+            <div class="w-full h-full flex items-center justify-center bg-gray-700">
+                <span class="text-6xl">💿</span>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Quick Actions -->
+        <div class="space-y-2">
+            <button onclick="runAction('translate', '{{ album.id }}')" 
+                    class="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded flex items-center justify-center space-x-2">
+                <span>🌐</span><span>Перевести</span>
+            </button>
+            <button onclick="runAction('cover', '{{ album.id }}')" 
+                    class="w-full bg-purple-600 hover:bg-purple-700 py-2 rounded flex items-center justify-center space-x-2">
+                <span>🎨</span><span>Обложка</span>
+            </button>
+            <button onclick="showProcessPreview('{{ album.id }}')" 
+                    class="w-full bg-green-600 hover:bg-green-700 py-2 rounded flex items-center justify-center space-x-2">
+                <span>🎚️</span><span>Обработать</span>
+            </button>
+            <button onclick="showPublishModal('{{ album.id }}')" 
+                    class="w-full bg-yellow-600 hover:bg-yellow-700 py-2 rounded flex items-center justify-center space-x-2">
+                <span>📤</span><span>Опубликовать</span>
+            </button>
+        </div>
+        
+        <!-- Task Progress (if active) -->
+        <div id="album-progress" class="mt-4 hidden" data-task-id="">
+            <div class="bg-gray-800 p-3 rounded">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold" id="progress-title">Обработка...</span>
+                    <span class="text-xs text-gray-400" id="progress-percent">0%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded-full h-2">
+                    <div id="progress-bar" class="bg-green-500 h-2 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+                <div class="text-xs text-gray-400 mt-1" id="progress-message">Starting...</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Album Info -->
+    <div class="md:col-span-2">
+        <h1 class="text-3xl font-bold mb-2">{{ album.title }}</h1>
+        <p class="text-gray-400 mb-6">{{ album.artist or 'Unknown Artist' }}</p>
+        
+        <!-- Status Badges -->
+        <div class="flex flex-wrap gap-2 mb-6">
+            <span class="px-3 py-1 rounded text-sm {% if album.translated %}bg-green-600{% else %}bg-gray-700{% endif %}">
+                {{ '✅ Переведён' if album.translated else '⬜ Без перевода' }}
+            </span>
+            <span class="px-3 py-1 rounded text-sm {% if album.cover %}bg-green-600{% else %}bg-gray-700{% endif %}">
+                {{ '✅ Обложка' if album.cover else '⬜ Без обложки' }}
+            </span>
+            <span class="px-3 py-1 rounded text-sm {% if album.processed %}bg-green-600{% else %}bg-gray-700{% endif %}">
+                {{ '✅ Обработан' if album.processed else '⬜ Не обработан' }}
+            </span>
+            <span class="px-3 py-1 rounded text-sm {% if album.published %}bg-green-600{% else %}bg-gray-700{% endif %}">
+                {{ '✅ Опубликован' if album.published else '⬜ Не опубликован' }}
+            </span>
+        </div>
+        
+        <!-- Tracks -->
+        <h2 class="text-xl font-semibold mb-4">Треки ({{ songs|length }})</h2>
+        <div class="space-y-2">
+            {% for song in songs %}
+            <div class="bg-gray-800 p-4 rounded flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <span class="text-gray-500 w-8">{{ song.order }}</span>
+                    <div>
+                        <div class="font-semibold">{{ song.title }}</div>
+                        <div class="text-sm text-gray-400">{{ song.type or 'Pop' }} • {{ song.duration or '0:00' }}</div>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    {% if song.translated_lyrics %}
+                    <span class="text-xs px-2 py-1 bg-green-900 text-green-300 rounded">EN</span>
+                    {% endif %}
+                    {% if song.processed %}
+                    <span class="text-xs px-2 py-1 bg-blue-900 text-blue-300 rounded">✓</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Metadata -->
+        <div class="mt-8 bg-gray-800 p-4 rounded">
+            <h3 class="font-semibold mb-3">Метаданные</h3>
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-400">ID:</span>
+                    <code class="ml-2 text-xs">{{ album.id }}</code>
+                </div>
+                <div>
+                    <span class="text-gray-400">Создан:</span>
+                    <span class="ml-2">{{ album.created_at }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Жанр:</span>
+                    <span class="ml-2">{{ album.primary_genre or 'Pop' }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Тип:</span>
+                    <span class="ml-2">{{ album.type or 'Single' }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Process Preview Modal -->
+<div id="process-preview-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-xl font-semibold mb-4">📋 Предпросмотр обработки</h3>
+        
+        <div id="process-preview-content">
+            <div class="animate-pulse">
+                <div class="h-4 bg-gray-700 rounded w-3/4 mb-2"></div>
+                <div class="h-4 bg-gray-700 rounded w-1/2 mb-4"></div>
+                <div class="space-y-2">
+                    <div class="h-3 bg-gray-700 rounded"></div>
+                    <div class="h-3 bg-gray-700 rounded"></div>
+                    <div class="h-3 bg-gray-700 rounded"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="flex space-x-3 mt-6">
+            <button onclick="closeProcessPreview()" class="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded">
+                Отмена
+            </button>
+            <a id="process-edit-link" href="#" class="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded text-center">
+                ✏️ Изменить
+            </a>
+            <button onclick="confirmProcess()" class="flex-1 bg-green-600 hover:bg-green-700 py-2 rounded">
+                ✅ Обработать
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Publish Modal -->
+<div id="publish-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+        <h3 class="text-xl font-semibold mb-4">📤 Публикация альбома</h3>
+        
+        <div class="bg-gray-700 p-4 rounded mb-4">
+            <div class="font-semibold mb-1">{{ album.title }}</div>
+            <div class="text-sm text-gray-400">{{ songs|length }} треков</div>
+        </div>
+        
+        <div class="space-y-2 mb-6">
+            <label class="flex items-center p-3 bg-gray-700 rounded cursor-pointer hover:bg-gray-600">
+                <input type="radio" name="distributor" value="routenote" class="mr-3" checked>
+                <span>RouteNote</span>
+            </label>
+            <label class="flex items-center p-3 bg-gray-700 rounded cursor-pointer hover:bg-gray-600">
+                <input type="radio" name="distributor" value="sferoom" class="mr-3">
+                <span>Sferoom</span>
+            </label>
+        </div>
+        
+        <div class="flex space-x-3">
+            <button onclick="closePublishModal()" class="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded">
+                Отмена
+            </button>
+            <button onclick="confirmPublish('{{ album.id }}')" class="flex-1 bg-yellow-600 hover:bg-yellow-700 py-2 rounded">
+                Опубликовать
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentAlbumId = '{{ album.id }}';
+let processPreviewData = null;
+
+async function showProcessPreview(albumId) {
+    const modal = document.getElementById('process-preview-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    
+    try {
+        const response = await fetch(`/api/albums/${albumId}/preview/process`);
+        const data = await response.json();
+        
+        processPreviewData = data;
+        
+        // Update edit link
+        document.getElementById('process-edit-link').href = `/albums/${albumId}/edit`;
+        
+        // Build preview content
+        let html = `
+            <div class="mb-4">
+                <div class="font-semibold text-lg">${data.album_title}</div>
+                <div class="text-gray-400">${data.artist}</div>
+                <div class="text-sm text-gray-500 mt-1">${data.total_tracks} треков</div>
+            </div>
+            
+            <div class="mb-4">
+                <div class="text-sm font-semibold mb-2">Будут созданы файлы:</div>
+                <div class="bg-gray-900 rounded p-3 max-h-48 overflow-y-auto space-y-1">
+        `;
+        
+        data.tracks.forEach(track => {
+            const statusIcon = track.will_be_processed ? '✓' : '⏭';
+            html += `
+                <div class="text-sm font-mono flex items-center">
+                    <span class="text-gray-500 mr-2">${statusIcon}</span>
+                    <span class="${track.will_be_processed ? 'text-green-400' : 'text-gray-500'}">${track.output_filename}</span>
+                </div>
+            `;
+        });
+        
+        html += `
+                </div>
+            </div>
+            
+            <div class="bg-gray-700 rounded p-3 text-sm">
+                <div class="font-semibold mb-2">Настройки:</div>
+                <div class="grid grid-cols-2 gap-2 text-gray-300">
+                    <div>Fade-out: ${data.settings.fade_out}с</div>
+                    <div>Нормализация: ${data.settings.target_lufs} LUFS</div>
+                    <div>Обрезка тишины: ✓</div>
+                    <div>Формат: ${data.output_format.toUpperCase()}</div>
+                </div>
+            </div>
+        `;
+        
+        document.getElementById('process-preview-content').innerHTML = html;
+        
+    } catch (error) {
+        document.getElementById('process-preview-content').innerHTML = `
+            <div class="text-red-400">❌ Ошибка загрузки превью: ${error.message}</div>
+        `;
+    }
+}
+
+function closeProcessPreview() {
+    const modal = document.getElementById('process-preview-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    processPreviewData = null;
+}
+
+async function confirmProcess() {
+    if (!processPreviewData) return;
+    
+    closeProcessPreview();
+    
+    // Show progress panel
+    const panel = document.getElementById('album-progress');
+    panel.classList.remove('hidden');
+    
+    try {
+        const response = await fetch(`/api/albums/${currentAlbumId}/process?confirmed=true`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (data.task_id) {
+            activeTaskId = data.task_id;
+            showNotification('Обработка запущена', `Task: ${data.task_id}`, 'info');
+        }
+    } catch (error) {
+        showNotification('Ошибка', error.message, 'error');
+    }
+}
+
+function closePublishModal() {
+    const modal = document.getElementById('publish-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+async function confirmPublish(albumId) {
+    const distributor = document.querySelector('input[name="distributor"]:checked').value;
+    
+    closePublishModal();
+    
+    try {
+        const response = await fetch(`/api/albums/${albumId}/publish?distributor=${distributor}`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (data.task_id) {
+            activeTaskId = data.task_id;
+            showNotification('Публикация запущена', `На ${distributor}`, 'info');
+        }
+    } catch (error) {
+        showNotification('Ошибка', error.message, 'error');
+    }
+}
+
+// Close modals on outside click
+document.getElementById('process-preview-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeProcessPreview();
+});
+document.getElementById('publish-modal').addEventListener('click', function(e) {
+    if (e.target === this) closePublishModal();
+});
+
+// Progress tracking
+let activeTaskId = null;
+
+function updateProgress(taskId, progress, message) {
+    if (taskId !== activeTaskId) return;
+    
+    const bar = document.getElementById('progress-bar');
+    const percent = document.getElementById('progress-percent');
+    const msg = document.getElementById('progress-message');
+    
+    if (bar) bar.style.width = `${progress}%`;
+    if (percent) percent.textContent = `${progress}%`;
+    if (msg) msg.textContent = message;
+    
+    if (progress >= 100) {
+        setTimeout(() => {
+            document.getElementById('album-progress').classList.add('hidden');
+            activeTaskId = null;
+            location.reload();
+        }, 2000);
+    }
+}
+
+// Override progress handler for album page
+const originalHandleProgress = handleProgressUpdate;
+handleProgressUpdate = function(data) {
+    originalHandleProgress(data);
+    
+    if (data.task_id === activeTaskId) {
+        updateProgress(data.task_id, data.progress, data.message);
+    }
+};
+</script>
+{% endblock %}

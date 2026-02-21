@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Альбомы - MyFlowMusic{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl font-bold mb-8">Альбомы ({{ total }})</h1>
+
+<div class="grid grid-cols-2 md:grid-cols-5 gap-6">
+    {% for album in albums %}
+    <a href="/albums/{{ album.id }}" class="block">
+        <div class="aspect-square bg-gray-800 rounded-lg mb-2 overflow-hidden">
+            {% if album.cover %}
+            <img src="/covers/{{ album.cover.id }}" class="w-full h-full object-cover">
+            {% else %}
+            <div class="w-full h-full flex items-center justify-center"><span class="text-4xl">💿</span></div>
+            {% endif %}
+        </div>
+        <h3 class="font-semibold truncate">{{ album.title }}</h3>
+        <p class="text-sm text-gray-400">{{ album.artist or 'Unknown' }}</p>
+    </a>
+    {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<div class="flex justify-center mt-8 gap-2">
+    {% if page > 1 %}<a href="/albums?page={{ page - 1 }}" class="px-4 py-2 bg-gray-800 rounded">← Назад</a>{% endif %}
+    <span class="px-4 py-2 bg-gray-700 rounded">{{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}<a href="/albums?page={{ page + 1 }}" class="px-4 py-2 bg-gray-800 rounded">Вперёд →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

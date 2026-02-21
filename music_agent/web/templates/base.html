@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MyFlowMusic{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="/static/js/app.js" defer></script>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-gray-900 text-white" x-data="{ mobileMenu: false }">
+    <nav class="bg-gray-800 p-4 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <a href="/" class="text-xl font-bold text-green-400">🌊 MyFlowMusic</a>
+            
+            <!-- Desktop Menu -->
+            <div class="hidden md:flex items-center space-x-6">
+                <a href="/" class="hover:text-green-400">Dashboard</a>
+                <a href="/albums" class="hover:text-green-400">Альбомы</a>
+                <a href="/albums/bulk" class="hover:text-green-400 text-yellow-400">⚡ Массовые</a>
+                <a href="/tasks" class="hover:text-green-400">Задачи</a>
+                <a href="/upload" class="hover:text-green-400">Загрузка</a>
+                <div class="flex items-center space-x-2 pl-4 border-l border-gray-700">
+                    <span class="text-xs text-gray-400">WS</span>
+                    <div id="ws-status" class="w-3 h-3 rounded-full bg-gray-500" title="Подключение..."></div>
+                </div>
+            </div>
+            
+            <!-- Mobile Menu Button -->
+            <button @click="mobileMenu = !mobileMenu" class="md:hidden text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
+            </button>
+        </div>
+        
+        <!-- Mobile Menu -->
+        <div x-show="mobileMenu" @click.away="mobileMenu = false" class="md:hidden mt-4 space-y-2">
+            <a href="/" class="block py-2 hover:text-green-400">Dashboard</a>
+            <a href="/albums" class="block py-2 hover:text-green-400">Альбомы</a>
+            <a href="/albums/bulk" class="block py-2 hover:text-yellow-400">⚡ Массовые операции</a>
+            <a href="/tasks" class="block py-2 hover:text-green-400">Задачи</a>
+            <a href="/upload" class="block py-2 hover:text-green-400">Загрузка</a>
+        </div>
+    </nav>
+    <main class="max-w-7xl mx-auto p-6">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

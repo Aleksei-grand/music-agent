@@ -13,6 +13,7 @@ import re
 
 from ..utils.retry import retry_with_backoff
 from ..utils.rate_limiter import SUNO_RATE_LIMITER
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,32 +67,60 @@ class SunoAPIClient:
         Returns:
             True если cookie рабочий, False если нет
         """
-        try:
-            logger.debug("Validating Suno cookie...")
-            SUNO_RATE_LIMITER.acquire()
-            
-            response = self.session.get(
-                f"{self.BASE_URL}/api/feed/",
-                params={'limit': 1},
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                logger.info("Suno cookie is valid")
-                return True
-            elif response.status_code == 401:
-                logger.error("Suno cookie expired or invalid (401)")
-                return False
-            elif response.status_code == 429:
-                logger.warning("Suno rate limited (429)")
-                return True  # Cookie валиден, но rate limited
-            else:
-                logger.warning(f"Suno cookie validation returned {response.status_code}")
-                return False
+        logger.debug("Validating Suno cookie...")
+        max_attempts = 3
+        transient_errors = 0
+        
+        for attempt in range(1, max_attempts + 1):
+            try:
+                SUNO_RATE_LIMITER.acquire()
                 
-        except requests.RequestException as e:
-            logger.error(f"Cookie validation failed: {e}")
-            return False
+                response = self.session.get(
+                    f"{self.BASE_URL}/api/feed/",
+                    params={'limit': 1},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    logger.info("Suno cookie is valid")
+                    return True
+                if response.status_code in (401, 403):
+                    logger.error(f"Suno cookie expired or invalid ({response.status_code})")
+                    return False
+                if response.status_code == 429:
+                    logger.warning("Suno rate limited (429)")
+                    return True  # Cookie валиден, но rate limited
+                if 500 <= response.status_code < 600:
+                    transient_errors += 1
+                    logger.warning(
+                        f"Suno cookie validation transient server error {response.status_code} "
+                        f"(attempt {attempt}/{max_attempts})"
+                    )
+                    if attempt < max_attempts:
+                        time.sleep(1.5 * attempt)
+                    continue
+                
+                logger.warning(
+                    f"Suno cookie validation returned unexpected status {response.status_code}"
+                )
+                return False
+                    
+            except requests.RequestException as e:
+                transient_errors += 1
+                logger.warning(
+                    f"Cookie validation request error (attempt {attempt}/{max_attempts}): {e}"
+                )
+                if attempt < max_attempts:
+                    time.sleep(1.5 * attempt)
+        
+        if transient_errors:
+            logger.warning(
+                "Suno cookie validation could not be completed due to transient errors; "
+                "continuing sync and relying on main fetch step."
+            )
+            return True
+        
+        return False
     
     @retry_with_backoff(
         max_retries=3,
@@ -224,9 +253,10 @@ class SunoBrowserClient:
     Используется если API блокирует
     """
     
-    def __init__(self, cookie: str, headless: bool = True):
+    def __init__(self, cookie: str, headless: bool = True, browser_path: Optional[str] = None):
         self.cookie = cookie
         self.headless = headless
+        self.browser_path = browser_path
         
     def get_library(self) -> List[SunoTrack]:
         """Получить треки через браузер"""
@@ -235,12 +265,16 @@ class SunoBrowserClient:
         tracks = []
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.headless)
+            launch_kwargs = {"headless": self.headless}
+            normalized_path = (self.browser_path or "").strip().strip('"').strip("'")
+            if normalized_path and Path(normalized_path).exists():
+                launch_kwargs["executable_path"] = normalized_path
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context()
             
             # Устанавливаем куки
             context.add_cookies([{
-                'name': 'session',
+                'name': '__session',
                 'value': self._extract_session_cookie(),
                 'domain': '.suno.com',
                 'path': '/'
@@ -249,54 +283,245 @@ class SunoBrowserClient:
             page = context.new_page()
             
             try:
-                # Открываем библиотеку
-                logger.info("Opening Suno library in browser...")
-                page.goto("https://suno.com/library", timeout=60000)
+                # Сначала пробуем получить данные напрямую через API в браузере
+                logger.info("Trying to fetch data via browser API...")
+                tracks = self._fetch_via_browser_api(page)
                 
-                # Ждём загрузки треков
-                page.wait_for_selector("[data-testid='track-item']", timeout=30000)
+                if tracks:
+                    logger.info(f"Successfully fetched {len(tracks)} tracks via browser API")
+                    return tracks
                 
-                # Прокручиваем для подгрузки всех треков
-                self._scroll_to_load_all(page)
+                # Fallback: парсим HTML страницы
+                logger.info("Falling back to HTML parsing...")
+                tracks = self._fetch_via_html_parsing(page)
                 
-                # Извлекаем данные
-                track_elements = page.query_selector_all("[data-testid='track-item']")
-                
-                for elem in track_elements:
-                    try:
-                        # Извлекаем ID из атрибута или URL
-                        track_id = elem.get_attribute('data-track-id')
-                        title_elem = elem.query_selector(".track-title")
-                        title = title_elem.inner_text() if title_elem else "Untitled"
-                        
-                        # Дата создания
-                        date_elem = elem.query_selector(".track-date")
-                        created_at = date_elem.get_attribute('datetime') if date_elem else None
-                        
-                        # Создаём объект с минимальными данными
-                        # Полные данные получим через API или отдельный запрос
-                        track_data = {
-                            'id': track_id,
-                            'title': title,
-                            'created_at': created_at,
-                            'metadata': {}
-                        }
-                        tracks.append(SunoTrack(track_data))
-                        
-                    except Exception as e:
-                        logger.warning(f"Error parsing track element: {e}")
-                        continue
+                return tracks
                 
             except Exception as e:
                 logger.error(f"Browser error: {e}")
-                raise
+                # Делаем скриншот для отладки
+                try:
+                    page.screenshot(path="suno_debug.png")
+                    logger.info("Screenshot saved to suno_debug.png")
+                except:
+                    pass
+                return tracks
             finally:
                 browser.close()
+    
+    def _fetch_via_browser_api(self, page) -> List[SunoTrack]:
+        """Получить треки через API запрос в браузере"""
+        tracks = []
+        
+        try:
+            # Используем fetch API в браузере для обхода CORS/restrictions
+            js_code = """
+            async () => {
+                try {
+                    const response = await fetch('https://studio-api.suno.ai/api/feed/?limit=100', {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/json'
+                        },
+                        credentials: 'include'
+                    });
+                    if (!response.ok) {
+                        return { error: `HTTP ${response.status}: ${response.statusText}` };
+                    }
+                    const data = await response.json();
+                    return data;
+                } catch (e) {
+                    return { error: e.message };
+                }
+            }
+            """
+            
+            result = page.evaluate(js_code)
+            
+            if result and isinstance(result, dict):
+                if 'error' in result:
+                    logger.warning(f"Browser API returned error: {result['error']}")
+                    return tracks
+                
+                feed_data = result
+                if isinstance(feed_data, dict):
+                    clips = feed_data.get('clips', [])
+                    if not clips:
+                        # Пробуем другие ключи
+                        for key in ['data', 'tracks', 'items', 'results']:
+                            if key in feed_data:
+                                clips = feed_data[key]
+                                break
+                    
+                    for clip in clips:
+                        if not isinstance(clip, dict):
+                            continue
+                            
+                        track = SunoTrack(
+                            id=clip.get('id') or clip.get('track_id') or clip.get('clip_id', ''),
+                            title=clip.get('title') or clip.get('name', 'Untitled'),
+                            audio_url=clip.get('audio_url') or clip.get('url', ''),
+                            image_url=clip.get('image_url') or clip.get('cover_image_url', ''),
+                            created_at=clip.get('created_at') or clip.get('created', ''),
+                            tags=clip.get('metadata', {}).get('tags', '') if isinstance(clip.get('metadata'), dict) else '',
+                            is_favorite=clip.get('is_favorite', False)
+                        )
+                        
+                        if track.id:
+                            tracks.append(track)
+            
+            return tracks
+            
+        except Exception as e:
+            logger.warning(f"Browser API fetch failed: {e}")
+            return tracks
+    
+    def _fetch_via_html_parsing(self, page) -> List[SunoTrack]:
+        """Получить треки через парсинг HTML"""
+        tracks = []
+        
+        # Открываем библиотеку
+        logger.info("Opening Suno library in browser...")
+        page.goto("https://suno.com/library", timeout=60000)
+        
+        # Ждём загрузки страницы
+        page.wait_for_load_state("domcontentloaded", timeout=30000)
+        time.sleep(5)  # Даём время для рендеринга React
+        
+        # Проверяем, не редиректнуло ли на login
+        current_url = page.url
+        if 'login' in current_url or 'auth' in current_url:
+            logger.error(f"Redirected to login page: {current_url}")
+            return tracks
+        
+        logger.info(f"Current URL: {current_url}")
+        
+        # Пробуем разные селекторы (Suno часто меняет дизайн)
+        selectors = [
+            "[data-testid='track-item']",
+            "[data-track-id]",
+            ".track-item",
+            ".library-item",
+            "article[data-track-id]",
+            "[class*='track']",
+            "[class*='LibraryItem']",
+            "[class*='library']",
+            "a[href*='/song/']",
+            "a[href*='/clip/']",
+        ]
+        
+        track_elements = []
+        used_selector = None
+        
+        for selector in selectors:
+            try:
+                logger.debug(f"Trying selector: {selector}")
+                page.wait_for_selector(selector, timeout=10000)
+                track_elements = page.query_selector_all(selector)
+                if track_elements:
+                    used_selector = selector
+                    logger.info(f"Found {len(track_elements)} tracks using selector: {selector}")
+                    break
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
+                continue
+        
+        if not track_elements:
+            logger.error("No tracks found with any selector")
+            # Делаем скриншот для отладки
+            page.screenshot(path="suno_debug.png")
+            logger.info("Screenshot saved to suno_debug.png")
+            
+            # Пробуем получить HTML для анализа
+            html = page.content()
+            if len(html) < 1000:
+                logger.error(f"Page content too short ({len(html)} chars), possible auth issue")
+            return tracks
+        
+        # Прокручиваем для подгрузки всех треков
+        self._scroll_to_load_all(page)
+        
+        # Перезагружаем элементы после скролла
+        if used_selector:
+            track_elements = page.query_selector_all(used_selector)
+        
+        for elem in track_elements:
+            try:
+                # Извлекаем ID (пробуем разные атрибуты)
+                track_id = None
+                for attr in ['data-track-id', 'data-id', 'id']:
+                    track_id = elem.get_attribute(attr)
+                    if track_id:
+                        break
+                
+                # Если нет атрибута, ищем в ссылках
+                if not track_id:
+                    link = elem.query_selector("a[href*='/song/']") or elem.query_selector("a[href*='/clip/']")
+                    if link:
+                        href = link.get_attribute('href')
+                        match = re.search(r'/(song|clip)/([a-f0-9-]+)', href)
+                        if match:
+                            track_id = match.group(2)
+                
+                if not track_id:
+                    continue
+                
+                # Ищем название (пробуем разные селекторы)
+                title_selectors = [
+                    ".track-title",
+                    "[class*='title']",
+                    "h3",
+                    "h4",
+                    ".text-primary",
+                    "span[class*='text']",
+                ]
+                
+                title = "Untitled"
+                for title_sel in title_selectors:
+                    title_elem = elem.query_selector(title_sel)
+                    if title_elem:
+                        title = title_elem.inner_text().strip()
+                        if title:
+                            break
+                
+                # Дата создания
+                date_selectors = [
+                    ".track-date",
+                    "time",
+                    "[datetime]",
+                    ".date",
+                ]
+                
+                created_at = None
+                for date_sel in date_selectors:
+                    date_elem = elem.query_selector(date_sel)
+                    if date_elem:
+                        created_at = date_elem.get_attribute('datetime') or date_elem.inner_text()
+                        if created_at:
+                            break
+                
+                # Создаём объект с минимальными данными
+                track_data = {
+                    'id': track_id,
+                    'title': title,
+                    'created_at': created_at,
+                    'metadata': {}
+                }
+                tracks.append(SunoTrack(track_data))
+                logger.debug(f"Parsed track: {title} ({track_id})")
+                
+            except Exception as e:
+                logger.warning(f"Error parsing track element: {e}")
+                continue
         
         return tracks
     
     def _extract_session_cookie(self) -> str:
         """Извлечь session из cookie строки"""
+        match = re.search(r'__session=([^;]+)', self.cookie)
+        if match:
+            return match.group(1)
         match = re.search(r'session=([^;]+)', self.cookie)
         return match.group(1) if match else self.cookie
     
@@ -346,7 +571,11 @@ class SunoClient:
             
             if use_browser_fallback:
                 logger.info("Falling back to browser method...")
-                self.browser_client = SunoBrowserClient(self.cookie, headless=False)
+                self.browser_client = SunoBrowserClient(
+                    self.cookie,
+                    headless=settings.playwright_headless,
+                    browser_path=settings.playwright_browser_path or None
+                )
                 return self.browser_client.get_library()
             else:
                 raise

@@ -314,62 +314,83 @@ class SunoBrowserClient:
         tracks = []
         
         try:
-            # Используем fetch API в браузере для обхода CORS/restrictions
-            js_code = """
-            async () => {
-                try {
-                    const response = await fetch('https://studio-api.suno.ai/api/feed/?limit=100', {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'Content-Type': 'application/json'
-                        },
-                        credentials: 'include'
-                    });
-                    if (!response.ok) {
-                        return { error: `HTTP ${response.status}: ${response.statusText}` };
+            # Пробуем несколько endpoints
+            endpoints = [
+                'https://studio-api.suno.ai/api/feed/?limit=100',
+                'https://studio-api.suno.ai/api/feed/v2?limit=100',
+                'https://suno.com/api/feed?limit=100',
+            ]
+            
+            for endpoint in endpoints:
+                js_code = f"""
+                async () => {{
+                    try {{
+                        const response = await fetch('{endpoint}', {{
+                            method: 'GET',
+                            headers: {{
+                                'Accept': 'application/json',
+                                'Content-Type': 'application/json'
+                            }},
+                            credentials: 'include'
+                        }});
+                        if (!response.ok) {{
+                            return {{ error: `HTTP ${{response.status}}: ${{response.statusText}}` }};
+                        }}
+                        const data = await response.json();
+                        return {{ success: true, data: data }};
+                    }} catch (e) {{
+                        return {{ error: e.message }};
+                    }}
+                }}
+                """
+                
+                result = page.evaluate(js_code)
+                
+                if result and isinstance(result, dict):
+                    if result.get('success') and result.get('data'):
+                        logger.info(f"Successfully fetched from {endpoint}")
+                        return self._parse_feed_data(result['data'])
+                    elif 'error' in result:
+                        logger.debug(f"Endpoint {endpoint} error: {result['error']}")
+                        continue
+            
+            # Если все endpoints не сработали, пробуем найти данные в window.__INITIAL_STATE__ или аналогичном
+            logger.info("Trying to extract data from page state...")
+            state_js = """
+            () => {
+                // Ищем данные в глобальных переменных
+                const sources = [
+                    window.__INITIAL_STATE__,
+                    window.__DATA__,
+                    window.__PRELOADED_STATE__,
+                    window.SUNO_DATA,
+                    window.APP_STATE
+                ];
+                for (let src of sources) {
+                    if (src && (src.clips || src.feed || src.tracks || src.songs)) {
+                        return src;
                     }
-                    const data = await response.json();
-                    return data;
-                } catch (e) {
-                    return { error: e.message };
                 }
+                // Ищем в script тегах
+                const scripts = document.querySelectorAll('script');
+                for (let script of scripts) {
+                    const text = script.textContent || '';
+                    if (text.includes('clips') || text.includes('feed')) {
+                        const match = text.match(/\{[\s\S]*"clips"[\s\S]*\}/);
+                        if (match) {
+                            try {
+                                return JSON.parse(match[0]);
+                            } catch (e) {}
+                        }
+                    }
+                }
+                return null;
             }
             """
-            
-            result = page.evaluate(js_code)
-            
-            if result and isinstance(result, dict):
-                if 'error' in result:
-                    logger.warning(f"Browser API returned error: {result['error']}")
-                    return tracks
-                
-                feed_data = result
-                if isinstance(feed_data, dict):
-                    clips = feed_data.get('clips', [])
-                    if not clips:
-                        # Пробуем другие ключи
-                        for key in ['data', 'tracks', 'items', 'results']:
-                            if key in feed_data:
-                                clips = feed_data[key]
-                                break
-                    
-                    for clip in clips:
-                        if not isinstance(clip, dict):
-                            continue
-                            
-                        track = SunoTrack(
-                            id=clip.get('id') or clip.get('track_id') or clip.get('clip_id', ''),
-                            title=clip.get('title') or clip.get('name', 'Untitled'),
-                            audio_url=clip.get('audio_url') or clip.get('url', ''),
-                            image_url=clip.get('image_url') or clip.get('cover_image_url', ''),
-                            created_at=clip.get('created_at') or clip.get('created', ''),
-                            tags=clip.get('metadata', {}).get('tags', '') if isinstance(clip.get('metadata'), dict) else '',
-                            is_favorite=clip.get('is_favorite', False)
-                        )
-                        
-                        if track.id:
-                            tracks.append(track)
+            state_result = page.evaluate(state_js)
+            if state_result:
+                logger.info("Found data in page state")
+                return self._parse_feed_data(state_result)
             
             return tracks
             
@@ -377,13 +398,52 @@ class SunoBrowserClient:
             logger.warning(f"Browser API fetch failed: {e}")
             return tracks
     
+    def _parse_feed_data(self, data) -> List[SunoTrack]:
+        """Парсит данные из feed API"""
+        tracks = []
+        
+        if not isinstance(data, dict):
+            return tracks
+        
+        clips = data.get('clips', [])
+        if not clips:
+            # Пробуем другие ключи
+            for key in ['data', 'tracks', 'items', 'results', 'feed']:
+                if key in data:
+                    clips = data[key]
+                    break
+        
+        if not isinstance(clips, list):
+            logger.warning(f"Clips is not a list: {type(clips)}")
+            return tracks
+        
+        for clip in clips:
+            if not isinstance(clip, dict):
+                continue
+                
+            track = SunoTrack(
+                id=clip.get('id') or clip.get('track_id') or clip.get('clip_id', ''),
+                title=clip.get('title') or clip.get('name', 'Untitled'),
+                audio_url=clip.get('audio_url') or clip.get('url', ''),
+                image_url=clip.get('image_url') or clip.get('cover_image_url', ''),
+                created_at=clip.get('created_at') or clip.get('created', ''),
+                tags=clip.get('metadata', {}).get('tags', '') if isinstance(clip.get('metadata'), dict) else '',
+                is_favorite=clip.get('is_favorite', False)
+            )
+            
+            if track.id:
+                tracks.append(track)
+        
+        logger.info(f"Parsed {len(tracks)} tracks from feed data")
+        return tracks
+    
     def _fetch_via_html_parsing(self, page) -> List[SunoTrack]:
         """Получить треки через парсинг HTML"""
         tracks = []
         
-        # Открываем библиотеку
-        logger.info("Opening Suno library in browser...")
-        page.goto("https://suno.com/library", timeout=60000)
+        # Открываем home (library теперь редиректит сюда)
+        logger.info("Opening Suno home page...")
+        page.goto("https://suno.com/home", timeout=60000)
         
         # Ждём загрузки страницы
         page.wait_for_load_state("domcontentloaded", timeout=30000)
@@ -397,18 +457,44 @@ class SunoBrowserClient:
         
         logger.info(f"Current URL: {current_url}")
         
+        # На home странице может быть несколько секций - ищем Library/My Library
+        library_links = [
+            "a:has-text('Library')",
+            "a:has-text('My Library')",
+            "a:has-text('My Songs')",
+            "[data-testid='library-link']",
+            "a[href*='/library']",
+            "button:has-text('Library')",
+        ]
+        
+        for link_selector in library_links:
+            try:
+                link = page.query_selector(link_selector)
+                if link:
+                    logger.info(f"Found library link: {link_selector}")
+                    link.click()
+                    time.sleep(3)  # Ждём загрузки библиотеки
+                    logger.info(f"Clicked library link, new URL: {page.url}")
+                    break
+            except Exception as e:
+                logger.debug(f"Library link {link_selector} not found or clickable: {e}")
+                continue
+        
         # Пробуем разные селекторы (Suno часто меняет дизайн)
+        # На /home странице библиотека может быть в разных секциях
         selectors = [
             "[data-testid='track-item']",
             "[data-track-id]",
             ".track-item",
             ".library-item",
             "article[data-track-id]",
-            "[class*='track']",
+            "[class*='track']:not([class*='tracker'])",  # исключаем tracker
             "[class*='LibraryItem']",
-            "[class*='library']",
+            "[class*='library'] > div > div",  # вложенные в library
             "a[href*='/song/']",
             "a[href*='/clip/']",
+            "[class*='group'] a[href*='/song/']",  # группы с песнями
+            "div[class*='relative'] a[href*='suno.com/song/']",  # относительные контейнеры
         ]
         
         track_elements = []

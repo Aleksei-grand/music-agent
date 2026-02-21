@@ -446,6 +446,8 @@ class SunoBrowserClient:
         if used_selector:
             track_elements = page.query_selector_all(used_selector)
         
+        logger.info(f"Parsing {len(track_elements)} track elements...")
+        
         for elem in track_elements:
             try:
                 # Извлекаем ID (пробуем разные атрибуты)
@@ -453,6 +455,7 @@ class SunoBrowserClient:
                 for attr in ['data-track-id', 'data-id', 'id']:
                     track_id = elem.get_attribute(attr)
                     if track_id:
+                        logger.debug(f"Found track_id via attribute {attr}: {track_id}")
                         break
                 
                 # Если нет атрибута, ищем в ссылках
@@ -463,8 +466,18 @@ class SunoBrowserClient:
                         match = re.search(r'/(song|clip)/([a-f0-9-]+)', href)
                         if match:
                             track_id = match.group(2)
+                            logger.debug(f"Found track_id via href: {track_id}")
+                
+                # Если всё ещё нет ID, ищем вложенные элементы с data-track-id
+                if not track_id:
+                    nested = elem.query_selector("[data-track-id]")
+                    if nested:
+                        track_id = nested.get_attribute('data-track-id')
+                        logger.debug(f"Found track_id via nested element: {track_id}")
                 
                 if not track_id:
+                    elem_html = elem.inner_html()[:200] if elem else "N/A"
+                    logger.debug(f"Skipping element without track_id. HTML: {elem_html}")
                     continue
                 
                 # Ищем название (пробуем разные селекторы)
@@ -481,8 +494,9 @@ class SunoBrowserClient:
                 for title_sel in title_selectors:
                     title_elem = elem.query_selector(title_sel)
                     if title_elem:
-                        title = title_elem.inner_text().strip()
-                        if title:
+                        title_text = title_elem.inner_text().strip()
+                        if title_text:
+                            title = title_text
                             break
                 
                 # Дата создания
@@ -508,12 +522,17 @@ class SunoBrowserClient:
                     'created_at': created_at,
                     'metadata': {}
                 }
-                tracks.append(SunoTrack(track_data))
-                logger.debug(f"Parsed track: {title} ({track_id})")
+                track = SunoTrack(track_data)
+                tracks.append(track)
+                logger.info(f"✓ Parsed track: {title} ({track_id[:8]}...)")
                 
             except Exception as e:
                 logger.warning(f"Error parsing track element: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
                 continue
+        
+        logger.info(f"Successfully parsed {len(tracks)} tracks from {len(track_elements)} elements")
         
         return tracks
     

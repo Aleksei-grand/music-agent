@@ -457,6 +457,20 @@ class SunoBrowserClient:
         
         logger.info(f"Current URL: {current_url}")
         
+        # Проверяем авторизацию (наличие кнопки Sign In)
+        try:
+            sign_in_btn = page.query_selector("text='Sign In'")
+            if sign_in_btn:
+                is_visible = sign_in_btn.is_visible()
+                if is_visible:
+                    logger.error("❌ NOT LOGGED IN to Suno!")
+                    logger.error("Please update SUNO_COOKIE in .env file")
+                    logger.error("Cookie has expired or is invalid.")
+                    page.screenshot(path="suno_not_logged_in.png")
+                    return tracks
+        except Exception as e:
+            logger.debug(f"Sign In check error: {e}")
+        
         # На home странице может быть несколько секций - ищем Library/My Library
         library_links = [
             "a:has-text('Library')",

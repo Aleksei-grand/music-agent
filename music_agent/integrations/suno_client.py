@@ -481,20 +481,19 @@ class SunoBrowserClient:
                 continue
         
         # Пробуем разные селекторы (Suno часто меняет дизайн)
-        # На /home странице библиотека может быть в разных секциях
+        # Сначала ищем ССЫЛКИ на песни (это надежнее чем div'ы с классом 'track')
         selectors = [
+            "a[href*='/song/']",  # Прямые ссылки на песни
+            "a[href*='/clip/']",
+            "a[href*='suno.com/song/']",
             "[data-testid='track-item']",
             "[data-track-id]",
             ".track-item",
             ".library-item",
             "article[data-track-id]",
-            "[class*='track']:not([class*='tracker'])",  # исключаем tracker
             "[class*='LibraryItem']",
             "[class*='library'] > div > div",  # вложенные в library
-            "a[href*='/song/']",
-            "a[href*='/clip/']",
-            "[class*='group'] a[href*='/song/']",  # группы с песнями
-            "div[class*='relative'] a[href*='suno.com/song/']",  # относительные контейнеры
+            "div[class*='group'] a[href*='/song/']",  # группы с песнями
         ]
         
         track_elements = []
@@ -553,42 +552,43 @@ class SunoBrowserClient:
         
         for elem in track_elements:
             try:
-                # Извлекаем ID (пробуем разные атрибуты)
+                # Если элемент сам является ссылкой (a[href*='/song/'])
+                tag_name = elem.evaluate("el => el.tagName.toLowerCase()")
                 track_id = None
-                for attr in ['data-track-id', 'data-id', 'id']:
-                    track_id = elem.get_attribute(attr)
-                    if track_id:
-                        logger.debug(f"Found track_id via attribute {attr}: {track_id}")
-                        break
                 
-                # Если нет атрибута, ищем в ссылках
-                if not track_id:
-                    link = elem.query_selector("a[href*='/song/']") or elem.query_selector("a[href*='/clip/']")
-                    if link:
-                        href = link.get_attribute('href')
-                        match = re.search(r'/(song|clip)/([a-f0-9-]+)', href)
-                        if match:
-                            track_id = match.group(2)
-                            logger.debug(f"Found track_id via href: {track_id}")
-                
-                # Если всё ещё нет ID, ищем вложенные элементы с data-track-id
-                if not track_id:
-                    nested = elem.query_selector("[data-track-id]")
-                    if nested:
-                        track_id = nested.get_attribute('data-track-id')
-                        logger.debug(f"Found track_id via nested element: {track_id}")
-                
-                # Ищем ID в любой ссылке на suno.com/song/ или suno.com/clip/
-                if not track_id:
-                    any_link = elem.query_selector("a[href*='suno.com/']")
-                    if any_link:
-                        href = any_link.get_attribute('href')
-                        logger.debug(f"Found link: {href}")
+                if tag_name == 'a':
+                    # Это ссылка - извлекаем ID прямо из href
+                    href = elem.get_attribute('href')
+                    logger.debug(f"Link element href: {href}")
+                    if href:
                         # Ищем UUID в ссылке
                         match = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', href)
                         if match:
                             track_id = match.group(0)
-                            logger.debug(f"Found track_id via UUID in href: {track_id}")
+                            logger.debug(f"Found track_id via UUID in link href: {track_id}")
+                        else:
+                            # Пробуем старый формат /song/ID или /clip/ID
+                            match = re.search(r'/(song|clip)/([a-f0-9-]+)', href)
+                            if match:
+                                track_id = match.group(2)
+                                logger.debug(f"Found track_id via /song/ path: {track_id}")
+                else:
+                    # Это контейнер - ищем атрибуты
+                    for attr in ['data-track-id', 'data-id', 'id']:
+                        track_id = elem.get_attribute(attr)
+                        if track_id:
+                            logger.debug(f"Found track_id via attribute {attr}: {track_id}")
+                            break
+                    
+                    # Если нет атрибута, ищем вложенные ссылки
+                    if not track_id:
+                        link = elem.query_selector("a[href*='/song/']") or elem.query_selector("a[href*='/clip/']")
+                        if link:
+                            href = link.get_attribute('href')
+                            match = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', href)
+                            if match:
+                                track_id = match.group(0)
+                                logger.debug(f"Found track_id via nested link: {track_id}")
                 
                 if not track_id:
                     try:
@@ -598,24 +598,47 @@ class SunoBrowserClient:
                         logger.debug("Skipping element without track_id (could not get HTML)")
                     continue
                 
-                # Ищем название (пробуем разные селекторы)
-                title_selectors = [
-                    ".track-title",
-                    "[class*='title']",
-                    "h3",
-                    "h4",
-                    ".text-primary",
-                    "span[class*='text']",
-                ]
-                
+                # Ищем название трека
                 title = "Untitled"
-                for title_sel in title_selectors:
-                    title_elem = elem.query_selector(title_sel)
-                    if title_elem:
-                        title_text = title_elem.inner_text().strip()
-                        if title_text:
-                            title = title_text
-                            break
+                
+                if tag_name == 'a':
+                    # Для ссылок: текст ссылки часто является названием
+                    link_text = elem.inner_text().strip()
+                    if link_text and len(link_text) > 1 and 'Make a' not in link_text:
+                        title = link_text
+                        logger.debug(f"Found title in link text: {title}")
+                    else:
+                        # Или ищем img alt или aria-label
+                        img = elem.query_selector("img")
+                        if img:
+                            alt = img.get_attribute('alt')
+                            if alt:
+                                title = alt
+                                logger.debug(f"Found title in img alt: {title}")
+                        if title == "Untitled":
+                            aria = elem.get_attribute('aria-label')
+                            if aria:
+                                title = aria
+                                logger.debug(f"Found title in aria-label: {title}")
+                else:
+                    # Для контейнеров пробуем разные селекторы
+                    title_selectors = [
+                        ".track-title",
+                        "[class*='title']",
+                        "h3",
+                        "h4",
+                        ".text-primary",
+                        "span[class*='text']",
+                        "a"  # сама ссылка может содержать название
+                    ]
+                    
+                    for title_sel in title_selectors:
+                        title_elem = elem.query_selector(title_sel)
+                        if title_elem:
+                            title_text = title_elem.inner_text().strip()
+                            if title_text and len(title_text) > 1 and 'Make a' not in title_text:
+                                title = title_text
+                                break
                 
                 # Дата создания
                 date_selectors = [

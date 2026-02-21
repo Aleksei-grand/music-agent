@@ -22,7 +22,7 @@ if not exist "venv\Scripts\activate.bat" (
 
 :: Check .env file
 if not exist ".env" (
-    echo ⚠️  Configuration file (.env) not found!
+    echo ⚠️  Configuration file ^(.env^) not found!
     echo    Please run music-agent-first-run.bat first
     pause
     exit /b 1
@@ -233,6 +233,7 @@ echo.
 echo Open browser: http://localhost:8000
 echo Press Ctrl+C to stop
 echo.
+call venv\Scripts\activate.bat
 python agent.py web
 echo.
 echo Web UI stopped
@@ -247,6 +248,7 @@ echo 🤖 Starting Telegram Bot...
 echo.
 echo Press Ctrl+C to stop
 echo.
+call venv\Scripts\activate.bat
 python run_bot.py
 echo.
 echo Bot stopped

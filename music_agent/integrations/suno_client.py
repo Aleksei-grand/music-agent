@@ -448,6 +448,23 @@ class SunoBrowserClient:
         
         logger.info(f"Parsing {len(track_elements)} track elements...")
         
+        # Сохраняем HTML для отладки
+        try:
+            html_preview = page.content()[:5000]
+            with open("suno_page.html", "w", encoding="utf-8") as f:
+                f.write(page.content())
+            logger.info("Saved page HTML to suno_page.html")
+        except Exception as e:
+            logger.warning(f"Could not save HTML: {e}")
+        
+        # Логируем первый элемент для анализа
+        if track_elements:
+            try:
+                first_html = track_elements[0].inner_html()[:500]
+                logger.info(f"First element HTML preview: {first_html}")
+            except Exception as e:
+                logger.warning(f"Could not get element HTML: {e}")
+        
         for elem in track_elements:
             try:
                 # Извлекаем ID (пробуем разные атрибуты)
@@ -475,9 +492,24 @@ class SunoBrowserClient:
                         track_id = nested.get_attribute('data-track-id')
                         logger.debug(f"Found track_id via nested element: {track_id}")
                 
+                # Ищем ID в любой ссылке на suno.com/song/ или suno.com/clip/
                 if not track_id:
-                    elem_html = elem.inner_html()[:200] if elem else "N/A"
-                    logger.debug(f"Skipping element without track_id. HTML: {elem_html}")
+                    any_link = elem.query_selector("a[href*='suno.com/']")
+                    if any_link:
+                        href = any_link.get_attribute('href')
+                        logger.debug(f"Found link: {href}")
+                        # Ищем UUID в ссылке
+                        match = re.search(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', href)
+                        if match:
+                            track_id = match.group(0)
+                            logger.debug(f"Found track_id via UUID in href: {track_id}")
+                
+                if not track_id:
+                    try:
+                        elem_html = elem.inner_html()[:300] if elem else "N/A"
+                        logger.debug(f"Skipping element without track_id. HTML: {elem_html}")
+                    except:
+                        logger.debug("Skipping element without track_id (could not get HTML)")
                     continue
                 
                 # Ищем название (пробуем разные селекторы)

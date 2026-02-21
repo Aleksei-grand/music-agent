@@ -163,7 +163,7 @@ docker pull ghcr.io/aleksei-grand/myflowmusic:v0.2.0-beta
 
 **GrandEmotions / VOLNAI**
 - Telegram: [@grandemotions1](https://t.me/grandemotions1)
-- Bot: [@grandemotions1_bot](https://t.me/grandemotions1_bot)
+- Создать своего бота: @BotFather
 ```
 
 6. Прикрепите бинарники (если нужно) или оставьте как есть

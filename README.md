@@ -141,7 +141,7 @@ agent publish --album-id xxx --distributor routenote
 /cancel   - Отмена текущей операции
 ```
 
-**@grandemotions1_bot** — попробуйте бота
+**Создайте своего бота** через @BotFather, затем добавьте токен в `.env`
 
 ### Web UI
 
@@ -203,8 +203,10 @@ ROUTENOTE_COOKIE=your_routenote_cookie
 SFEROOM_COOKIE=your_sferoom_cookie
 
 # Telegram Bot (опционально)
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_ADMIN_IDS=your_telegram_id
+# 1. Напишите @BotFather → /newbot → введите имя → получите токен
+# 2. Напишите @userinfobot → получите свой ID
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxyz
+TELEGRAM_ADMIN_IDS=123456789
 
 # База данных (опционально, по умолчанию SQLite)
 DB_TYPE=sqlite

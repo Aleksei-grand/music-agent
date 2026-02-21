@@ -111,7 +111,7 @@ docker pull ghcr.io/aleksei-grand/myflowmusic:v0.2.0-beta
 ## 🌐 Ссылки для README
 
 ```markdown
-- Telegram Bot: [@grandemotions1_bot](https://t.me/grandemotions1_bot)
+- Создать бота: @BotFather → /newbot
 - GitHub: [@Aleksei-grand](https://github.com/Aleksei-grand)
 ```
 

@@ -268,39 +268,44 @@ class SunoBrowserClient:
         with sync_playwright() as p:
             launch_kwargs = {"headless": self.headless}
             context = None
+            browser = None
+            using_profile = False
             
             normalized_path = (self.browser_path or "").strip().strip('"').strip("'")
-            if normalized_path and Path(normalized_path).exists():
+            
+            # Пробуем использовать user-data-dir (профиль браузера)
+            yandex_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Yandex" / "YandexBrowser" / "User Data"
+            chrome_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Google" / "Chrome" / "User Data"
+            edge_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Microsoft" / "Edge" / "User Data"
+            
+            user_data_dir = None
+            if yandex_profile.exists():
+                logger.info(f"Found Yandex browser profile: {yandex_profile}")
+                user_data_dir = str(yandex_profile)
+            elif chrome_profile.exists():
+                logger.info(f"Found Chrome profile: {chrome_profile}")
+                user_data_dir = str(chrome_profile)
+            elif edge_profile.exists():
+                logger.info(f"Found Edge profile: {edge_profile}")
+                user_data_dir = str(edge_profile)
+            
+            if user_data_dir and normalized_path and Path(normalized_path).exists():
+                # Используем launch_persistent_context для профиля
+                logger.info(f"Using persistent context with profile: {user_data_dir}")
                 launch_kwargs["executable_path"] = normalized_path
-                
-                # Пробуем использовать user-data-dir (профиль браузера)
-                yandex_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Yandex" / "YandexBrowser" / "User Data"
-                chrome_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Google" / "Chrome" / "User Data"
-                edge_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Microsoft" / "Edge" / "User Data"
-                
-                if yandex_profile.exists():
-                    logger.info(f"Using Yandex browser profile: {yandex_profile}")
-                    launch_kwargs["args"] = [f"--user-data-dir={yandex_profile}", "--profile-directory=Default"]
-                elif chrome_profile.exists():
-                    logger.info(f"Using Chrome profile: {chrome_profile}")
-                    launch_kwargs["args"] = [f"--user-data-dir={chrome_profile}", "--profile-directory=Default"]
-                elif edge_profile.exists():
-                    logger.info(f"Using Edge profile: {edge_profile}")
-                    launch_kwargs["args"] = [f"--user-data-dir={edge_profile}", "--profile-directory=Default"]
-            
-            browser = p.chromium.launch(**launch_kwargs)
-            
-            # Если используем профиль браузера, используем дефолтный контекст
-            # а не создаём новый (иначе куки из профиля не подтянутся)
-            if "args" in launch_kwargs and any("user-data-dir" in arg for arg in launch_kwargs.get("args", [])):
-                logger.info("Using browser's default context (with profile)")
-                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    **launch_kwargs
+                )
+                using_profile = True
             else:
+                # Обычный запуск без профиля
+                if normalized_path and Path(normalized_path).exists():
+                    launch_kwargs["executable_path"] = normalized_path
+                browser = p.chromium.launch(**launch_kwargs)
                 context = browser.new_context()
-            
-            # Устанавливаем куки только если не используем профиль браузера
-            using_profile = "args" in launch_kwargs and any("user-data-dir" in arg for arg in launch_kwargs.get("args", []))
-            if not using_profile:
+                
+                # Устанавливаем куки вручную
                 logger.info("Setting cookie manually")
                 context.add_cookies([{
                     'name': '__session',
@@ -308,8 +313,6 @@ class SunoBrowserClient:
                     'domain': '.suno.com',
                     'path': '/'
                 }])
-            else:
-                logger.info("Using browser profile cookies, skipping manual cookie")
             
             page = context.new_page()
             
@@ -338,7 +341,11 @@ class SunoBrowserClient:
                     pass
                 return tracks
             finally:
-                browser.close()
+                # Закрываем браузер или контекст
+                if browser:
+                    browser.close()
+                elif context:
+                    context.close()
     
     def _fetch_via_browser_api(self, page) -> List[SunoTrack]:
         """Получить треки через API запрос в браузере"""

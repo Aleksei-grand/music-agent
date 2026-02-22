@@ -267,31 +267,49 @@ class SunoBrowserClient:
         
         with sync_playwright() as p:
             launch_kwargs = {"headless": self.headless}
+            context = None
+            
             normalized_path = (self.browser_path or "").strip().strip('"').strip("'")
             if normalized_path and Path(normalized_path).exists():
                 launch_kwargs["executable_path"] = normalized_path
+                
                 # Пробуем использовать user-data-dir (профиль браузера)
-                # Для Яндекс браузера профиль обычно в %LOCALAPPDATA%\Yandex\YandexBrowser\User Data
                 yandex_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Yandex" / "YandexBrowser" / "User Data"
                 chrome_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Google" / "Chrome" / "User Data"
+                edge_profile = Path(os.environ.get('LOCALAPPDATA', '')) / "Microsoft" / "Edge" / "User Data"
                 
                 if yandex_profile.exists():
                     logger.info(f"Using Yandex browser profile: {yandex_profile}")
-                    launch_kwargs["args"] = [f"--user-data-dir={yandex_profile}"]
+                    launch_kwargs["args"] = [f"--user-data-dir={yandex_profile}", "--profile-directory=Default"]
                 elif chrome_profile.exists():
                     logger.info(f"Using Chrome profile: {chrome_profile}")
-                    launch_kwargs["args"] = [f"--user-data-dir={chrome_profile}"]
+                    launch_kwargs["args"] = [f"--user-data-dir={chrome_profile}", "--profile-directory=Default"]
+                elif edge_profile.exists():
+                    logger.info(f"Using Edge profile: {edge_profile}")
+                    launch_kwargs["args"] = [f"--user-data-dir={edge_profile}", "--profile-directory=Default"]
             
             browser = p.chromium.launch(**launch_kwargs)
-            context = browser.new_context()
             
-            # Устанавливаем куки
-            context.add_cookies([{
-                'name': '__session',
-                'value': self._extract_session_cookie(),
-                'domain': '.suno.com',
-                'path': '/'
-            }])
+            # Если используем профиль браузера, используем дефолтный контекст
+            # а не создаём новый (иначе куки из профиля не подтянутся)
+            if "args" in launch_kwargs and any("user-data-dir" in arg for arg in launch_kwargs.get("args", [])):
+                logger.info("Using browser's default context (with profile)")
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+            else:
+                context = browser.new_context()
+            
+            # Устанавливаем куки только если не используем профиль браузера
+            using_profile = "args" in launch_kwargs and any("user-data-dir" in arg for arg in launch_kwargs.get("args", []))
+            if not using_profile:
+                logger.info("Setting cookie manually")
+                context.add_cookies([{
+                    'name': '__session',
+                    'value': self._extract_session_cookie(),
+                    'domain': '.suno.com',
+                    'path': '/'
+                }])
+            else:
+                logger.info("Using browser profile cookies, skipping manual cookie")
             
             page = context.new_page()
             
